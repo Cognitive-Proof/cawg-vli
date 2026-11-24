@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+keri-core = { version = "=0.19.0-rc.12", features = ["oobi", "query"] }
+keri-controller = "=0.19.0-rc.12"
+teliox = "=0.19.0-rc.12"
+said = "=2.0.0-rc.4"
+cesrox = "=2.0.0-rc.2"
+acdc = "=0.2.0"
+c2pa = { version = "=0.92.2", default-features = false, features = ["rust_native_crypto"] }
+ciborium = "0.2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+
+# The in-process witness used by the delegation spike is only published in
+# the keriox repository, so take all keriox crates from the same tag to avoid
+# two copies of keri-core.
+[patch.crates-io]
+keri-core = { git = "https://github.com/THCLab/keriox", tag = "v0.19.0-rc.12" }
+keri-controller = { git = "https://github.com/THCLab/keriox", tag = "v0.19.0-rc.12" }
+teliox = { git = "https://github.com/THCLab/keriox", tag = "v0.19.0-rc.12" }

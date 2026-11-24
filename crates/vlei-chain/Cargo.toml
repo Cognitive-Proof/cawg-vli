@@ -1,0 +1,23 @@
+[package]
+name = "vlei-chain"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "vLEI trust chain for the testbed: KERI 1.0 TELs (vcp/iss/rev) and ACDC 1.0 credentials"
+
+[dependencies]
+acdc.workspace = true
+base64 = "0.23"
+blake3 = "1.8"
+jsonschema = { version = "0.63", default-features = false }
+keri-controller.workspace = true
+keri-core.workspace = true
+said.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2"
+
+[dev-dependencies]
+anyhow.workspace = true
+async-std = { version = "1.13", features = ["attributes"] }
+tempfile.workspace = true
