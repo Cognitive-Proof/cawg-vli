@@ -23,19 +23,19 @@ finding:
 | # | Finding | Severity | Thread | Evidence |
 |---|---|---|---|---|
 | F13 | `signer_aid` is never tied to the credentials | security | review item 1 | `verify.rs::borrowed_credentials_pass_the_steps_as_written` |
-| F14 | rotated-out keys still validate | security | review item 3; author agrees on anchored-only | `negative.rs::rotated_keys` (N26, N27) |
+| F14 | rotated-out keys still validate | security | review item 3; author agrees on anchored-only; Essbante proposes requiring `anchor_seq_num` | `negative.rs::rotated_keys` (N26, N27) |
 | F19 | a bad signature next to valid ones is accepted by a keriox-based validator | security | **new** | `negative.rs` N17 |
 | F20 | `signer_aid_oobi` URLs are attacker-chosen and fetched by validators | security | **new** | `negative.rs` N3, N25 |
-| F17 | no trust anchor configuration | security | review item 2 | `verify.rs::wrong_trust_anchor_fails_setup`, N24 |
+| F17 | no trust anchor configuration | security | review item 2; Essbante (GEDA delegation, `host-meta.json`) | `verify.rs::wrong_trust_anchor_fails_setup`, N24 |
 | F5 | issuers' KELs and TELs have no source | blocks validation | review item 5; Essbante | `chain.rs::full_chain_builds_and_links` (14 KELs, 7 TELs) |
 | F1 | the signed bytes are a re-encoding, not the stored bytes | interop | review item 10 | `assets.rs`, `verify.rs::signatures_do_not_cover_the_stored_signer_payload_bytes` |
-| F18 | the authorisation dependencies are only referenced, not listed | interop | review item 1; author prefers to keep them in the trust model | N8–N11 |
+| F18 | the authorisation dependencies are only referenced, not listed | interop | review item 1; Essbante lists the four cases; author prefers to keep them in the trust model | N8–N11 |
 | F16 | the status source is named as "witnesses of the issuing QVI" | interop | review inline suggestion; author: witnesses hold TELs | N20–N22 |
 | F15 | the KEL refresh in step 2.b ignores `anchor_seq_num` | interop | **new** | `verify.rs::stale_signer_kel_is_refreshed_for_the_anchor` |
 | F9 | the anchor is a seal, and its hash is unnamed | interop | review item 7 | `sign.rs::anchored_signature_records_payload_digest`, N13 |
 | F12 | key index semantics are not stated in "Generating" | interop | **new** | N16, N16b |
 | F10 | the CDDL doesn't parse | spec | review item 8 | `infra/cddl/vlei-signature-payload.cddl` |
-| F6 | embedding an ECR conflicts with the ECR's own `privacyDisclaimer` | governance | **new** | schema text, `ecr-qvi` and `ecr-le` cases |
+| F6 | embedding an ECR conflicts with the ECR's own `privacyDisclaimer` | governance | Essbante (`generating.adoc:34`) | schema text, `ecr-qvi` and `ecr-le` cases |
 | F7, F11 | size: maps are 3.2–7.3 KB | guidance | **new** | `testbed sign` output |
 | F8 | authorisation credentials are issued to the QVI | clarification | covered by F18 | N8 |
 | F2, F3, F4 | ECR edges, ECR schema ID and `kel_seq_num` key lookup work as the PR says | confirmed | n/a | Phase 0 spikes |
@@ -205,7 +205,7 @@ The corrected definition, as suggested in the review, parses with the
 
 ## Governance and guidance
 
-### F6: ECR privacy (new)
+### F6: ECR privacy (raised by Essbante)
 
 GLEIF's ECR schema makes the holder solely responsible for presenting the
 credential "in a privacy-preserving manner using the mechanisms provided in
