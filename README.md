@@ -5,10 +5,10 @@ Rust testbed for the CAWG identity assertion `cawg.vlei` credential type
 trust chain, sign identity assertions with KERI keys, and validate them by
 following the PR's validation steps literally.
 
-Status: Phases 0–5 done — see [PHASE0.md](PHASE0.md) (capability check, KERI 1.0 TEL),
+Status: Phases 0–6 done — see [PHASE0.md](PHASE0.md) (capability check, KERI 1.0 TEL),
 [PHASE1-2.md](PHASE1-2.md) (trust chain, credentials, fixtures), [PHASE3.md](PHASE3.md)
 (signing, signed C2PA assets), [PHASE4.md](PHASE4.md) (validator) and [PHASE5.md](PHASE5.md) (negative
-tests). Next: Phase 6, the findings write-up for PR 269.
+tests). Findings for PR 269 are consolidated in [FINDINGS.md](FINDINGS.md).
 
 ```bash
 cargo test --workspace
