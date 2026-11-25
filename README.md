@@ -5,14 +5,16 @@ Rust testbed for the CAWG identity assertion `cawg.vlei` credential type
 trust chain, sign identity assertions with KERI keys, and validate them by
 following the PR's validation steps literally.
 
-Status: Phases 0–3 done — see [PHASE0.md](PHASE0.md) (capability check, KERI 1.0 TEL),
-[PHASE1-2.md](PHASE1-2.md) (trust chain, credentials, fixtures) and [PHASE3.md](PHASE3.md)
-(signing, signed C2PA assets). Next: Phase 4, the validator.
+Status: Phases 0–4 done — see [PHASE0.md](PHASE0.md) (capability check, KERI 1.0 TEL),
+[PHASE1-2.md](PHASE1-2.md) (trust chain, credentials, fixtures), [PHASE3.md](PHASE3.md)
+(signing, signed C2PA assets) and [PHASE4.md](PHASE4.md) (validator). Next: Phase 5,
+negative tests.
 
 ```bash
 cargo test --workspace
 cargo run -p testbed-cli -- chain --out fixtures/generated
 cargo run -p testbed-cli -- sign --out fixtures/generated
+cargo run -p testbed-cli -- verify --out fixtures/generated
 ```
 
 ```

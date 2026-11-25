@@ -19,7 +19,14 @@
 //! DIR/maps/CASE.cbor                  the identity assertion's `signature` (vlei-signature-payload-map)
 //! DIR/diag/CASE.cbordiag              the whole identity assertion, CBOR diagnostic notation
 //! DIR/fixtures.json                   chain fixtures, as for `chain`
+//! DIR/trust.json                      what a verifier pins: GLEIF Root, GEDA, schema SAIDs
+//! DIR/evidence.json                   public KELs, registries and TELs (stands in for witnesses)
 //! ```
+//!
+//! `testbed verify [--out DIR]` validates every `DIR/assets/*.png` offline
+//! from `trust.json` and `evidence.json`, following PR 269's validation
+//! steps, and writes `DIR/reports/CASE.json`. It exits non-zero if any
+//! asset fails.
 
 use std::{
     fs,
@@ -52,8 +59,9 @@ async fn main() -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("chain") => chain(out("fixtures/generated")).await,
         Some("sign") => sign(out("fixtures/generated")).await,
+        Some("verify") => verify(out("fixtures/generated")).await,
         _ => {
-            eprintln!("usage: testbed chain [--out DIR]\n       testbed sign [--out DIR]");
+            eprintln!("usage: testbed chain [--out DIR]\n       testbed sign [--out DIR]\n       testbed verify [--out DIR]");
             std::process::exit(2);
         }
     }
@@ -115,6 +123,44 @@ async fn sign(out: PathBuf) -> anyhow::Result<()> {
     // Fixtures after signing, so KELs include any anchoring events.
     let f = world.lock().unwrap().fixtures()?;
     write_fixtures(&f, &out)?;
+    fs::write(out.join("trust.json"), serde_json::to_string_pretty(&vlei_verify::Trust::from_fixtures(&f))?)?;
+    fs::write(out.join("evidence.json"), serde_json::to_string_pretty(&vlei_verify::Evidence::from_fixtures(&f, &[]))?)?;
     println!("wrote {}", out.display());
+    Ok(())
+}
+
+async fn verify(dir: PathBuf) -> anyhow::Result<()> {
+    let trust: vlei_verify::Trust = serde_json::from_str(&fs::read_to_string(dir.join("trust.json"))?)?;
+    let evidence: vlei_verify::Evidence = serde_json::from_str(&fs::read_to_string(dir.join("evidence.json"))?)?;
+    let db = tempfile::tempdir()?;
+    let verifier = vlei_verify::Verifier::new(db.path(), trust, evidence, vlei_verify::Policy::default(), None)?;
+    fs::create_dir_all(dir.join("reports"))?;
+    let mut assets: Vec<PathBuf> = fs::read_dir(dir.join("assets"))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "png"))
+        .collect();
+    assets.sort();
+    let mut failed = 0;
+    for path in assets {
+        let case = path.file_stem().unwrap().to_string_lossy().into_owned();
+        match verifier.verify_asset(&fs::read(&path)?).await {
+            Ok(r) => {
+                let role = match &r.role {
+                    vlei_verify::Role::LegalEntity => "legal entity".to_owned(),
+                    vlei_verify::Role::Oor { person, role } => format!("OOR  {person}, {role}"),
+                    vlei_verify::Role::EcrByQvi { person, role } => format!("ECR  {person}, {role} (QVI-issued)"),
+                    vlei_verify::Role::EcrByLe { person, role } => format!("ECR  {person}, {role} (LE-issued)"),
+                };
+                let anchor = r.anchor_seq_num.map(|a| format!("  anchored at sn {a}")).unwrap_or_default();
+                println!("{case:9} VALID  LEI {}  {role}  {}/{} sigs  {} creds{anchor}", r.lei, r.signatures, r.keys, r.credentials.len());
+                fs::write(dir.join("reports").join(format!("{case}.json")), serde_json::to_string_pretty(&r)?)?;
+            }
+            Err(e) => {
+                failed += 1;
+                println!("{case:9} FAIL   {e}");
+            }
+        }
+    }
+    anyhow::ensure!(failed == 0, "{failed} asset(s) failed validation");
     Ok(())
 }

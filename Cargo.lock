@@ -5275,6 +5275,7 @@ dependencies = [
  "vlei-chain",
  "vlei-holder",
  "vlei-sign",
+ "vlei-verify",
 ]
 
 [[package]]
@@ -5792,6 +5793,20 @@ dependencies = [
 [[package]]
 name = "vlei-verify"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "c2pa",
+ "keri-controller",
+ "keri-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "vlei-chain",
+ "vlei-holder",
+ "vlei-sign",
+]
 
 [[package]]
 name = "vsimd"

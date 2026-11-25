@@ -50,6 +50,8 @@ pub struct Credential {
 pub enum CredentialError {
     #[error("SAID: {0}")]
     Said(String),
+    #[error("unknown or missing schema `{0}`")]
+    UnknownSchema(String),
     #[error("credential does not satisfy schema {kind:?}: {errors:?}")]
     Schema { kind: Kind, errors: Vec<String> },
 }
@@ -159,5 +161,81 @@ pub fn issue(spec: Spec) -> Result<Credential, CredentialError> {
         registry: spec.registry.into(),
         edges: spec.edges,
         json: String::from_utf8(raw).expect("JSON is UTF-8"),
+    })
+}
+
+/// A credential as a verifier receives it: parsed, SAID-checked and
+/// schema-validated, with its JSON kept for claim lookups.
+#[derive(Debug, Clone)]
+pub struct Parsed {
+    pub credential: Credential,
+    pub value: Value,
+}
+
+impl Parsed {
+    /// A string claim from the attribute block `a`.
+    pub fn claim(&self, name: &str) -> Option<&str> {
+        self.value["a"][name].as_str()
+    }
+
+    pub fn edge(&self, label: &str) -> Option<&Edge> {
+        self.credential.edges.iter().find(|e| e.label == label)
+    }
+}
+
+/// Parses a serialized ACDC 1.0 vLEI credential the way a verifier must:
+/// the schema is chosen by `s` and must be one of GLEIF's, every SAID (`a`,
+/// `e`, `r` and the top-level `d`) must match its block, and the credential
+/// must satisfy the schema.
+pub fn parse(json: &str) -> Result<Parsed, CredentialError> {
+    let said_err = |m: &str| CredentialError::Said(m.to_owned());
+    let value: Value = serde_json::from_str(json).map_err(|e| CredentialError::Said(e.to_string()))?;
+    let top = value.as_object().ok_or_else(|| said_err("credential is not a JSON object"))?;
+    let s = top.get("s").and_then(Value::as_str).ok_or_else(|| CredentialError::UnknownSchema(String::new()))?;
+    let kind = Kind::from_said(s).ok_or_else(|| CredentialError::UnknownSchema(s.into()))?;
+
+    for block in ["a", "e", "r"] {
+        if let Some(b) = top.get(block) {
+            let map = b.as_object().ok_or_else(|| said_err(&format!("`{block}` is not expanded")))?;
+            let (said, _, _) = saidified(map.clone())?;
+            if map.get("d").and_then(Value::as_str) != Some(said.as_str()) {
+                return Err(said_err(&format!("SAID of `{block}` does not match its content")));
+            }
+        }
+    }
+    let (said, _, _) = saidified(top.clone())?;
+    if top.get("d").and_then(Value::as_str) != Some(said.as_str()) {
+        return Err(said_err("credential SAID `d` does not match its content"));
+    }
+    kind.validate(&value).map_err(|errors| CredentialError::Schema { kind, errors })?;
+    acdc::legacy::LegacyAcdc::parse(json.as_bytes()).map_err(|e| CredentialError::Said(e.to_string()))?;
+
+    let str_of = |v: &Value| v.as_str().unwrap_or_default().to_owned();
+    let edges = top
+        .get("e")
+        .and_then(Value::as_object)
+        .map(|e| {
+            e.iter()
+                .filter(|(k, _)| k.as_str() != "d")
+                .map(|(label, node)| Edge {
+                    label: label.clone(),
+                    n: str_of(&node["n"]),
+                    s: str_of(&node["s"]),
+                    o: node.get("o").map(str_of),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Parsed {
+        credential: Credential {
+            kind,
+            said,
+            issuer: str_of(&value["i"]),
+            issuee: str_of(&value["a"]["i"]),
+            registry: str_of(&value["ri"]),
+            edges,
+            json: json.to_owned(),
+        },
+        value,
     })
 }

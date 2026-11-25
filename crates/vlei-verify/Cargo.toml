@@ -1,6 +1,23 @@
 [package]
 name = "vlei-verify"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+publish.workspace = true
+description = "Validator for cawg.vlei identity assertions, following PR 269's validation steps"
 
 [dependencies]
+c2pa.workspace = true
+keri-controller.workspace = true
+keri-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2"
+vlei-chain = { path = "../vlei-chain" }
+vlei-holder = { path = "../vlei-holder" }
+vlei-sign = { path = "../vlei-sign" }
+
+[dev-dependencies]
+anyhow.workspace = true
+c2pa.workspace = true
+async-std = { version = "1.13", features = ["attributes"] }
+tempfile.workspace = true

@@ -17,3 +17,4 @@ tempfile.workspace = true
 vlei-chain = { path = "../vlei-chain" }
 vlei-holder = { path = "../vlei-holder" }
 vlei-sign = { path = "../vlei-sign" }
+vlei-verify = { path = "../vlei-verify" }
