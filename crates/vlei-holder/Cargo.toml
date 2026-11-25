@@ -1,6 +1,23 @@
 [package]
 name = "vlei-holder"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+publish.workspace = true
+description = "c2pa-rs credential holder for cawg.vlei, and a test asset signer"
 
 [dependencies]
+async-std = "1.13"
+c2pa.workspace = true
+c2pa_cbor = "=0.78.2"
+ciborium.workspace = true
+rcgen = "0.14"
+serde_json.workspace = true
+thiserror = "2"
+vlei-chain = { path = "../vlei-chain" }
+vlei-sign = { path = "../vlei-sign" }
+
+[dev-dependencies]
+keri-core.workspace = true
+anyhow.workspace = true
+async-std = { version = "1.13", features = ["attributes"] }
+tempfile.workspace = true

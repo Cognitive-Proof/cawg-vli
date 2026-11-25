@@ -12,13 +12,13 @@ teliox.workspace = true
 said.workspace = true
 cesrox.workspace = true
 acdc.workspace = true
-c2pa.workspace = true
 ciborium.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
+c2pa.workspace = true
 c2pa_cbor = "=0.78.2"
 async-trait = "0.1"
 

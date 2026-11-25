@@ -38,7 +38,7 @@ async fn full_chain_builds_and_links() -> anyhow::Result<()> {
     assert_eq!(le.current.public_keys.len(), 2);
 
     // Credentials: all seven, schema-valid (checked on issue), all issued.
-    let names = ["qvi", "le", "oor-auth-alice", "oor-alice", "ecr-auth-bob", "ecr-bob", "ecr-carol"];
+    let names = ["qvi", "le", "oor-auth-alice", "oor-alice", "oor-auth-dana", "oor-dana", "ecr-auth-bob", "ecr-bob", "ecr-carol"];
     assert_eq!(f.credentials.len(), names.len());
     for n in names {
         assert_eq!(status(&f, &w, n), Status::Issued, "{n}");
@@ -81,7 +81,7 @@ async fn full_chain_builds_and_links() -> anyhow::Result<()> {
 
     let json = serde_json::to_string_pretty(&f)?;
     let back: Fixtures = serde_json::from_str(&json)?;
-    assert_eq!(back.credentials.len(), 7);
+    assert_eq!(back.credentials.len(), 9);
     println!("fixtures: {} bytes, {} KELs", json.len(), f.kels.len());
     Ok(())
 }
@@ -140,4 +140,33 @@ fn missing_required_claim_fails_schema() {
     let msg = err.to_string();
     // No `e` section, and `a` lacks `officialRole`.
     assert!(msg.contains("is a required property") && msg.contains("at /a"), "{msg}");
+}
+
+#[async_std::test]
+async fn signer_oobi_resolves_to_kel_in_fresh_verifier() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let w = chain::build(dir.path()).await?;
+    let f = w.fixtures()?;
+    let oobi = &f.oobis["Alice"][0];
+    assert!(oobi.starts_with("http://witness1:3232/oobi/") && oobi.contains("/witness/"), "{oobi}");
+
+    let vdir = tempfile::tempdir()?;
+    let verifier = Controller::new(ControllerConfig {
+        db_path: vdir.path().into(),
+        transport: Box::new(w.transport.clone()),
+        ..Default::default()
+    })?;
+    let alice = f.aids["Alice"].prefix.parse()?;
+    assert!(verifier.find_state(&alice).is_err());
+    let resolved = vlei_chain::oobi::resolve(&verifier, oobi).await?;
+    assert_eq!(resolved, alice);
+    // The 2-of-3 group signer resolves the same way.
+    let dana = vlei_chain::oobi::resolve(&verifier, &f.oobis["Dana"][0]).await?;
+    assert_eq!(verifier.find_state(&dana)?.current.public_keys.len(), 3);
+    assert_eq!(verifier.find_state(&alice)?.current.public_keys, w.controller.find_state(&alice)?.current.public_keys);
+
+    // An OOBI for a witness that doesn't exist fails.
+    let broken = oobi.replace("witness1", "witness9");
+    assert!(vlei_chain::oobi::resolve(&verifier, &broken).await.is_err());
+    Ok(())
 }

@@ -16,6 +16,8 @@ said.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
+url = "2"
+witness = { git = "https://github.com/THCLab/keriox", tag = "v0.19.0-rc.12" }
 
 [dev-dependencies]
 anyhow.workspace = true

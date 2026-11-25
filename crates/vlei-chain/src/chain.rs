@@ -15,17 +15,22 @@
 //! so no witnesses or message delivery are needed while building. The
 //! public results are exported as [`Fixtures`].
 
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::{BTreeMap, HashMap}, path::Path, sync::Arc};
 
 use keri_controller::{
     config::ControllerConfig, controller::Controller, error::ControllerError, ActionRequired,
-    BasicPrefix, CryptoBox, KeyManager, RedbController, RedbIdentifier, SelfSigningPrefix,
+    BasicPrefix, CryptoBox, KeyManager, LocationScheme, RedbController, RedbIdentifier,
+    SelfSigningPrefix,
 };
 use keri_core::{
     event::sections::seal::{EventSeal, Seal},
     event_message::signed_event_message::Message,
-    prefix::IdentifierPrefix,
+    prefix::{CesrPrimitive, IdentifierPrefix},
+    actor::error::ActorError,
+    transport::test::{TestActorMap, TestTransport},
 };
+use url::{Host, Url};
+use witness::{WitnessEscrowConfig, WitnessListener};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -64,6 +69,8 @@ pub struct Member {
     pub name: String,
     pub keys: CryptoBox,
     pub id: RedbIdentifier,
+    /// OOBIs through which a verifier can fetch this AID's KEL (people only).
+    pub oobis: Vec<String>,
 }
 
 impl Member {
@@ -83,6 +90,8 @@ pub struct Org {
     /// How many member signatures an event needs.
     pub threshold: usize,
     pub registry: Option<TelEvent>,
+    /// OOBIs, if the group uses the witness.
+    pub oobis: Vec<String>,
 }
 
 impl Org {
@@ -123,13 +132,57 @@ pub struct Fixtures {
     /// Registry inception (`vcp`) per issuing organisation name.
     pub registries: BTreeMap<String, String>,
     pub credentials: BTreeMap<String, IssuedCredential>,
+    /// OOBIs of each person, by name.
+    pub oobis: BTreeMap<String, Vec<String>>,
+    /// The witness every person uses.
+    pub witness: WitnessInfo,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WitnessInfo {
+    pub prefix: String,
+    pub url: String,
+}
+
+/// Host and port of the in-process witness. Requests to it are routed by
+/// [`TestTransport`]; nothing listens on the network.
+pub const WITNESS_HOST: &str = "witness1";
+pub const WITNESS_PORT: u16 = 3232;
+const WITNESS_SEED: &str = "AK8F6AAiYDpXlWdj2O5F5-6wNCCNJh2A4XOlqwR_HwwH";
 
 pub struct World {
     pub controller: RedbController,
     pub orgs: BTreeMap<String, Org>,
     pub people: BTreeMap<String, Member>,
     pub credentials: BTreeMap<String, IssuedCredential>,
+    pub witness: LocationScheme,
+    /// Routes HTTP to the in-process witness; give it to verifiers too.
+    pub transport: TestTransport<ActorError>,
+}
+
+/// Starts the in-process witness and returns its location and a transport
+/// that reaches it.
+fn start_witness(dir: &Path) -> Result<(LocationScheme, TestTransport<ActorError>), ChainError> {
+    std::fs::create_dir_all(dir).map_err(other)?;
+    let url = Url::parse(&format!("http://{WITNESS_HOST}:{WITNESS_PORT}/")).map_err(other)?;
+    let listener = Arc::new(
+        WitnessListener::setup_with_redb(
+            url.clone(),
+            dir,
+            Some(WITNESS_SEED.into()),
+            WitnessEscrowConfig::default(),
+            keri_core::event_message::keri_version::KeriVersion::V1_0,
+        )
+        .map_err(other)?,
+    );
+    let location = LocationScheme {
+        eid: IdentifierPrefix::Basic(listener.get_prefix()),
+        scheme: keri_core::oobi::Scheme::Http,
+        url: Some(url),
+    };
+    let mut actors: TestActorMap = HashMap::new();
+    actors.insert((Host::Domain(WITNESS_HOST.into()), WITNESS_PORT), listener);
+    Ok((location, TestTransport::new(actors)))
 }
 
 async fn member(c: &RedbController, name: &str) -> Result<Member, ChainError> {
@@ -139,13 +192,99 @@ async fn member(c: &RedbController, name: &str) -> Result<Member, ChainError> {
         .await?;
     let sig = SelfSigningPrefix::Ed25519Sha512(keys.sign(icp.as_bytes())?);
     let id = c.finalize_incept(icp.as_bytes(), &sig)?;
-    Ok(Member { name: name.into(), keys, id })
+    Ok(Member { name: name.into(), keys, id, oobis: vec![] })
 }
 
 impl World {
     pub fn new(db: &Path) -> Result<Self, ChainError> {
-        let controller = Controller::new(ControllerConfig { db_path: db.to_owned(), ..Default::default() })?;
-        Ok(Self { controller, orgs: BTreeMap::new(), people: BTreeMap::new(), credentials: BTreeMap::new() })
+        let (witness, transport) = start_witness(&db.join("witness"))?;
+        let controller = Controller::new(ControllerConfig {
+            db_path: db.join("controller"),
+            transport: Box::new(transport.clone()),
+            ..Default::default()
+        })?;
+        Ok(Self {
+            controller,
+            orgs: BTreeMap::new(),
+            people: BTreeMap::new(),
+            credentials: BTreeMap::new(),
+            witness,
+            transport,
+        })
+    }
+
+    pub fn witness_prefix(&self) -> BasicPrefix {
+        match &self.witness.eid {
+            IdentifierPrefix::Basic(b) => b.clone(),
+            _ => unreachable!("witnesses have basic prefixes"),
+        }
+    }
+
+    /// Sends a person's new events to the witness and collects its receipts.
+    pub async fn publish(&mut self, person: &str) -> Result<(), ChainError> {
+        let wid = self.witness_prefix();
+        let p = self.people.get_mut(person).ok_or_else(|| other("unknown person"))?;
+        p.id.notify_witnesses().await?;
+        let about = p.id.id().clone();
+        let mut queries = Vec::new();
+        for q in p.id.query_receipts(&about, std::slice::from_ref(&wid))? {
+            let sig = p.sign(&q.encode().map_err(other)?)?;
+            queries.push((q, sig));
+        }
+        p.id.finalize_query_receipts(queries).await?;
+        Ok(())
+    }
+
+    /// Sends one group event, carrying every member signature in `sigs`, to the
+    /// witness and collects its receipt. (Each member's own copy carries only
+    /// its own signature, which the witness does not combine.)
+    pub async fn publish_org(
+        &mut self,
+        org: &str,
+        event: &[u8],
+        sigs: Vec<(BasicPrefix, SelfSigningPrefix)>,
+    ) -> Result<(), ChainError> {
+        let wid = self.witness_prefix();
+        let org = self.orgs.get_mut(org).ok_or_else(|| other("unknown organisation"))?;
+        let keri_core::event_message::cesr_adapter::EventType::KeyEvent(ke) =
+            keri_core::event_message::cesr_adapter::parse_event_type(event).map_err(other)?
+        else {
+            return Err(other("not a key event"));
+        };
+        let keys: Vec<String> = serde_json::from_slice::<serde_json::Value>(event).ok()
+            .and_then(|v| v["k"].as_array().map(|k| k.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()))
+            .filter(|k: &Vec<String>| !k.is_empty())
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.controller.find_state(&org.prefix).map(|s| s.current.public_keys.iter().map(|k| k.to_str()).collect())
+            })
+            .map_err(other)?;
+        let mut indexed = Vec::new();
+        for (key, sig) in sigs {
+            let index = keys.iter().position(|k| *k == key.to_str()).ok_or_else(|| other("signer key not in group"))?;
+            indexed.push(keri_core::prefix::IndexedSignature::new_both_same(sig, index as u16));
+        }
+        let signed = ke.sign(indexed, None, None);
+        self.controller.communication.resolve_loc_schema(&self.witness).await?;
+        self.controller
+            .communication
+            .send_message_to(self.witness.eid.clone(), Message::Notice(keri_core::event_message::signed_event_message::Notice::Event(signed)))
+            .await
+            .map_err(other)?;
+        let org_prefix = org.prefix.clone();
+        let m = &mut org.members[0];
+        let mut queries = Vec::new();
+        for q in m.id.query_receipts(&org.prefix, std::slice::from_ref(&wid))? {
+            let sig = m.sign(&q.encode().map_err(other)?)?;
+            queries.push((q, sig));
+        }
+        m.id.finalize_query_receipts(queries).await?;
+        // Local members each hold a copy with only their own signature; take the
+        // fully signed, receipted event back from the witness.
+        let url = self.witness.url.clone().expect("witness URL");
+        let oobi = format!("{url}oobi/{org_prefix}/witness/{}", self.witness.eid);
+        crate::oobi::resolve(&self.controller, &oobi).await.map_err(other)?;
+        Ok(())
     }
 
     /// Incepts a group of `n` fresh members with signing threshold `threshold`,
@@ -156,6 +295,7 @@ impl World {
         n: usize,
         threshold: usize,
         delegator: Option<&str>,
+        witnessed: bool,
     ) -> Result<(), ChainError> {
         let mut members = Vec::new();
         for i in 0..n {
@@ -168,8 +308,8 @@ impl World {
             others,
             threshold as u64,
             Some(threshold as u64),
-            None,
-            None,
+            witnessed.then(|| vec![self.witness_prefix()]),
+            witnessed.then_some(1),
             delegator_prefix.clone(),
         )?;
         let mut signed_exns = Vec::new();
@@ -178,6 +318,7 @@ impl World {
             signed_exns.push((exn.as_bytes().to_vec(), members[0].id.sign_with_index(sig, 0)?));
         }
         let sig = members[0].sign(icp.as_bytes())?;
+        let mut icp_sigs = vec![(BasicPrefix::Ed25519(members[0].keys.public_key()), sig.clone())];
         let (prefix, forwards) = members[0].id.finalize_group_incept(icp.as_bytes(), sig, signed_exns).await?;
 
         // The other members co-sign the inception until the threshold is met.
@@ -188,6 +329,7 @@ impl World {
                 return Err(other(format!("{name}: expected a multisig request, got {actions:?}")));
             }
             let sig = m.sign(icp.as_bytes())?;
+            icp_sigs.push((BasicPrefix::Ed25519(m.keys.public_key()), sig.clone()));
             m.id.finalize_group_event(icp.as_bytes(), sig, vec![]).await?;
         }
 
@@ -201,30 +343,61 @@ impl World {
             self.anchor(delegator, &[seal]).await?;
         }
 
+        let oobis = if witnessed {
+            let url = self.witness.url.as_ref().expect("witness URL");
+            vec![format!("{url}oobi/{prefix}/witness/{}", self.witness.eid)]
+        } else {
+            vec![]
+        };
+        self.orgs.insert(name.into(), Org { name: name.into(), prefix: prefix.clone(), members, threshold, registry: None, oobis });
+        if witnessed {
+            self.publish_org(name, icp.as_bytes(), icp_sigs).await?;
+        }
         let state = self.controller.find_state(&prefix).map_err(|e| other(format!("{name} not accepted: {e}")))?;
         if state.sn != 0 {
             return Err(other(format!("{name}: unexpected sn {}", state.sn)));
         }
-        self.orgs.insert(name.into(), Org { name: name.into(), prefix, members, threshold, registry: None });
         Ok(())
     }
 
+    /// Incepts a single-key person AID with the world's witness, publishes it
+    /// and records its OOBI (`{url}oobi/{aid}/witness/{witness}`, as keripy
+    /// writes them).
     pub async fn add_person(&mut self, name: &str) -> Result<(), ChainError> {
-        let m = member(&self.controller, name).await?;
-        self.people.insert(name.into(), m);
-        Ok(())
+        let keys = CryptoBox::new()?;
+        let icp = self
+            .controller
+            .incept(
+                vec![BasicPrefix::Ed25519(keys.public_key())],
+                vec![BasicPrefix::Ed25519(keys.next_public_key())],
+                vec![self.witness.clone()],
+                1,
+            )
+            .await?;
+        let sig = SelfSigningPrefix::Ed25519Sha512(keys.sign(icp.as_bytes())?);
+        let id = self.controller.finalize_incept(icp.as_bytes(), &sig)?;
+        let url = self.witness.url.as_ref().expect("witness URL");
+        let oobi = format!("{url}oobi/{}/witness/{}", id.id(), self.witness.eid);
+        self.people.insert(name.into(), Member { name: name.into(), keys, id, oobis: vec![oobi] });
+        self.publish(name).await
     }
 
     /// Anchors `seals` in organisation `org`'s KEL with an `ixn` signed by
     /// `threshold` members.
-    pub async fn anchor(&mut self, org: &str, seals: &[Seal]) -> Result<(), ChainError> {
-        let org = self.orgs.get_mut(org).ok_or_else(|| other("unknown organisation"))?;
+    pub async fn anchor(&mut self, org_name: &str, seals: &[Seal]) -> Result<(), ChainError> {
+        let org = self.orgs.get_mut(org_name).ok_or_else(|| other("unknown organisation"))?;
         let participants: Vec<IdentifierPrefix> = org.members.iter().map(|m| m.id.id().clone()).collect();
         let (ixn, _) = org.members[0].id.anchor_group_with_seals(&org.prefix, seals, &participants)?;
+        let mut sigs = Vec::new();
         for m in org.members.iter_mut().take(org.threshold) {
             let sig = m.sign(ixn.as_bytes())?;
+            sigs.push((BasicPrefix::Ed25519(m.keys.public_key()), sig.clone()));
             m.id.finalize_group_event(ixn.as_bytes(), sig, vec![]).await?;
         }
+        if !org.oobis.is_empty() {
+            self.publish_org(org_name, ixn.as_bytes(), sigs).await?;
+        }
+        let org = &self.orgs[org_name];
         let kel = self.controller.get_kel_with_receipts(&org.prefix).unwrap_or_default();
         if !seals.iter().all(|s| tel::kel_anchors(&kel, s)) {
             return Err(other(format!("{}: anchoring ixn was not accepted", org.name)));
@@ -334,7 +507,26 @@ impl World {
             .into_iter()
             .map(|(k, o)| (k.to_owned(), self.orgs[o].aid()))
             .collect();
-        Ok(Fixtures { dt: DT.into(), trust, aids, kels, registries, credentials: self.credentials.clone() })
+        let oobis = self
+            .people
+            .values()
+            .map(|p| (p.name.clone(), p.oobis.clone()))
+            .chain(self.orgs.values().filter(|o| !o.oobis.is_empty()).map(|o| (o.name.clone(), o.oobis.clone())))
+            .collect();
+        let witness = WitnessInfo {
+            prefix: self.witness.eid.to_string(),
+            url: self.witness.url.as_ref().map(|u| u.to_string()).unwrap_or_default(),
+        };
+        Ok(Fixtures {
+            dt: DT.into(),
+            trust,
+            aids,
+            kels,
+            registries,
+            credentials: self.credentials.clone(),
+            oobis,
+            witness,
+        })
     }
 }
 
@@ -352,10 +544,12 @@ pub async fn build(db: &Path) -> Result<World, ChainError> {
     let mut w = World::new(db)?;
 
     // Phase 1: identifiers.
-    w.incept_org("GLEIF-Root", 3, 2, None).await?;
-    w.incept_org("GEDA", 1, 1, Some("GLEIF-Root")).await?;
-    w.incept_org("QVI", 1, 1, Some("GEDA")).await?;
-    w.incept_org("Fabrikam", 2, 2, None).await?;
+    w.incept_org("GLEIF-Root", 3, 2, None, false).await?;
+    w.incept_org("GEDA", 1, 1, Some("GLEIF-Root"), false).await?;
+    w.incept_org("QVI", 1, 1, Some("GEDA"), false).await?;
+    w.incept_org("Fabrikam", 2, 2, None, true).await?;
+    // Dana signs with three devices, any two of which suffice.
+    w.incept_org("Dana", 3, 2, None, true).await?;
     for p in ["Alice", "Bob", "Carol"] {
         w.add_person(p).await?;
     }
@@ -390,6 +584,27 @@ pub async fn build(db: &Path) -> Result<World, ChainError> {
         &alice,
         vec![("LEI", json!(LE_LEI)), ("personLegalName", json!("Alice Example")), ("officialRole", json!("Chief Financial Officer"))],
         vec![edge("auth", &oor_auth, Some("I2I"))],
+    )
+    .await?;
+
+    let dana = w.orgs["Dana"].aid();
+    let oor_auth_dana = w
+        .issue(
+            "oor-auth-dana",
+            "Fabrikam",
+            Kind::OorAuth,
+            &qvi_aid,
+            vec![("AID", json!(dana)), ("LEI", json!(LE_LEI)), ("personLegalName", json!("Dana Example")), ("officialRole", json!("Chief Executive Officer"))],
+            vec![edge("le", &le, None)],
+        )
+        .await?;
+    w.issue(
+        "oor-dana",
+        "QVI",
+        Kind::Oor,
+        &dana,
+        vec![("LEI", json!(LE_LEI)), ("personLegalName", json!("Dana Example")), ("officialRole", json!("Chief Executive Officer"))],
+        vec![edge("auth", &oor_auth_dana, Some("I2I"))],
     )
     .await?;
 

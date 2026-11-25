@@ -6,5 +6,6 @@
 
 pub mod chain;
 pub mod credential;
+pub mod oobi;
 pub mod schema;
 pub mod tel;

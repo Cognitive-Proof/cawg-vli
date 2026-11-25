@@ -50,9 +50,9 @@ privacy disclaimer and salts); KELs 5.9 KB for the trust chain's groups,
 
 ## Limits
 
-- **No witnesses yet.** All parties share one controller database, so KELs
-  carry no witness receipts and there are no OOBIs to resolve. Phase 3 needs
-  OOBIs for `signer_aid_oobi`; witnesses come in then.
+- **Witnesses only for signers.** Phase 3 added an in-process witness for
+  people, Dana and Fabrikam (see PHASE3.md); the other organisations' KELs
+  carry no witness receipts.
 - **CESR 2.0 attachments.** keriox writes KEL attachments in CESR 2.0
   (`-_AAACAA…`). vLEI production (keripy 1.x / KERIA) uses CESR 1.0. Events
   are KERI 1.0 either way.

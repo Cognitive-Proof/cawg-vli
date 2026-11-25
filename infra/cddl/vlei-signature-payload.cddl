@@ -1,0 +1,21 @@
+; The `signature` field of a CAWG identity assertion with
+; signer_payload.sig_type = "cawg.vlei" (CAWG identity assertion PR 269),
+; with the PR's definition corrected: `role_cred` is a map (the PR writes
+; `?"role_cred" = (...)`, which is not valid CDDL), and members are
+; comma-separated. Encoded in core deterministic CBOR (RFC 8949 §4.2.1).
+
+vlei-signature-payload-map = {
+  "signer_aid": tstr,          ; CESR-encoded AID of the signer
+  "qvi_cred": tstr,            ; QVI vLEI credential, ACDC 1.0 JSON
+  "le_cred": tstr,             ; Legal Entity vLEI credential, ACDC 1.0 JSON
+  ? "role_cred": role-cred-map,
+  "signer_aid_oobi": [+ tstr], ; OOBI URLs for the signer's KEL
+  "kel_seq_num": uint,         ; sn of the establishment event whose keys signed
+  ? "anchor_seq_num": uint,    ; sn of the event anchoring the payload digest
+  "aid_sig": [+ tstr],         ; CESR indexed signatures over signer_payload
+}
+
+role-cred-map = {
+  "auth_cred": tstr,           ; OOR / ECR authorisation credential, or "" for an LE-issued ECR
+  "cred": tstr,                ; OOR or ECR credential
+}
