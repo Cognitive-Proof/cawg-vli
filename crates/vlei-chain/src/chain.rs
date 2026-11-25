@@ -382,6 +382,28 @@ impl World {
         self.publish(name).await
     }
 
+    /// Rotates a person's keys (the pre-committed next key becomes current)
+    /// and publishes the `rot` to the witness.
+    pub async fn rotate_person(&mut self, name: &str) -> Result<(), ChainError> {
+        let p = self.people.get_mut(name).ok_or_else(|| other("unknown person"))?;
+        p.keys.rotate()?;
+        let rot = p
+            .id
+            .rotate(
+                vec![BasicPrefix::Ed25519(p.keys.public_key())],
+                vec![BasicPrefix::Ed25519(p.keys.next_public_key())],
+                1,
+                vec![],
+                vec![],
+                1,
+            )
+            .await
+            .map_err(other)?;
+        let sig = SelfSigningPrefix::Ed25519Sha512(p.keys.sign(rot.as_bytes())?);
+        p.id.finalize_rotate(rot.as_bytes(), sig).await.map_err(other)?;
+        self.publish(name).await
+    }
+
     /// Anchors `seals` in organisation `org`'s KEL with an `ixn` signed by
     /// `threshold` members.
     pub async fn anchor(&mut self, org_name: &str, seals: &[Seal]) -> Result<(), ChainError> {

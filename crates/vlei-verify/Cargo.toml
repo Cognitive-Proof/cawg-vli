@@ -19,5 +19,7 @@ vlei-sign = { path = "../vlei-sign" }
 [dev-dependencies]
 anyhow.workspace = true
 c2pa.workspace = true
+keri-core.workspace = true
+serde_json.workspace = true
 async-std = { version = "1.13", features = ["attributes"] }
 tempfile.workspace = true
